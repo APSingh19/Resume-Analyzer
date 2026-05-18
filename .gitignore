@@ -1,0 +1,13 @@
+myenv/
+App/myenv/
+venvapp/
+App/venvapp/
+.streamlit/secrets.toml
+App/.streamlit/secrets.toml
+__pycache__/
+*/__pycache__/
+*.pyc
+*.log
+.env
+App/Uploaded_Resumes/*.pdf
+
