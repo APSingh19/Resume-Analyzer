@@ -21,7 +21,10 @@ import plotly.express as px  # to create visualisations at the admin session
 import plotly.graph_objects as go
 from geopy.geocoders import Nominatim
 # libraries used to parse the pdf files
-from pyresparser import ResumeParser
+try:
+    from pyresparser import ResumeParser
+except ImportError:
+    ResumeParser = None
 from pdfminer.layout import LAParams, LTTextBox
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfinterp import PDFResourceManager
@@ -53,7 +56,7 @@ def get_csv_download_link(df, filename, text):
 
 
 # Reads Pdf file and check_extractable
-def pdf_reader(file):
+def extract_pdf_text(file):
     resource_manager = PDFResourceManager()
     fake_file_handle = io.StringIO()
     converter = TextConverter(
@@ -66,13 +69,46 @@ def pdf_reader(file):
     # close open handles
     converter.close()
     fake_file_handle.close()
+    return text
 
-    # Extract names using regex (this is a simple example)
-    # Adjust the regex pattern according to your needs
-    names = re.findall(r'\b[A-Z][a-z]+\s[A-Z][a-z]+\b', text)
 
-    # Return the extracted names
-    return names
+def pdf_reader(file):
+    return extract_pdf_text(file)
+
+
+def count_pdf_pages(file):
+    with open(file, 'rb') as fh:
+        return sum(1 for _ in PDFPage.get_pages(fh, caching=True, check_extractable=True))
+
+
+def basic_resume_parser(file_path):
+    text = extract_pdf_text(file_path)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+    phone_match = re.search(r'(?:(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{3,5}\)?[-.\s]?)?\d{3,5}[-.\s]?\d{4,6})', text)
+    name_match = re.search(r'\b[A-Z][a-z]+\s[A-Z][a-z]+\b', text)
+
+    known_skills = [
+        'python', 'java', 'javascript', 'typescript', 'react', 'node', 'django',
+        'flask', 'streamlit', 'sql', 'mysql', 'mongodb', 'html', 'css',
+        'machine learning', 'deep learning', 'tensorflow', 'keras', 'pytorch',
+        'pandas', 'numpy', 'excel', 'tableau', 'power bi', 'android', 'kotlin',
+        'flutter', 'swift', 'figma', 'photoshop', 'communication', 'leadership'
+    ]
+    lower_text = text.lower()
+    skills = sorted({skill.title() for skill in known_skills if skill in lower_text})
+
+    degree_keywords = ['B.Tech', 'M.Tech', 'B.E', 'M.E', 'BCA', 'MCA', 'B.Sc', 'M.Sc', 'MBA', 'BBA', 'PhD']
+    degrees = [degree for degree in degree_keywords if degree.lower() in lower_text]
+
+    return {
+        'name': name_match.group(0) if name_match else (lines[0] if lines else 'Candidate'),
+        'email': email_match.group(0) if email_match else '',
+        'mobile_number': phone_match.group(0) if phone_match else '',
+        'degree': degrees,
+        'no_of_pages': count_pdf_pages(file_path),
+        'skills': skills,
+    }
 
 
 # show uploaded file path to view pdf_display
@@ -81,6 +117,28 @@ def show_pdf(file_path):
         base64_pdf = base64.b64encode(f.read()).decode('utf-8')
     pdf_display = F'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="1000" type="application/pdf"></iframe>'
     st.markdown(pdf_display, unsafe_allow_html=True)
+
+
+def parse_resume(file_path):
+    if ResumeParser is None:
+        return basic_resume_parser(file_path)
+
+    try:
+        return ResumeParser(file_path).get_extracted_data()
+    except OSError as exc:
+        if 'en_core_web_sm' in str(exc):
+            st.error(
+                "The spaCy model en_core_web_sm is missing. Run "
+                "`python -m spacy download en_core_web_sm` locally, or redeploy after installing requirements.txt."
+            )
+            return None
+        if 'config.cfg' in str(exc):
+            st.warning(
+                "pyresparser is not compatible with the installed spaCy version, "
+                "so the app is using the built-in resume parser instead."
+            )
+            return basic_resume_parser(file_path)
+        raise
 
 
 # course recommendations which has data already loaded from Courses.py
@@ -112,18 +170,30 @@ def get_config_value(key, default=""):
 
 
 # sql connector
-connection = pymysql.connect(
-    host=get_config_value('MYSQL_HOST', 'localhost'),
-    user=get_config_value('MYSQL_USER', 'root'),
-    password=get_config_value('MYSQL_PASSWORD', ''),
-    db=get_config_value('MYSQL_DATABASE', 'VC'),
-    port=int(get_config_value('MYSQL_PORT', '3306')),
-)
-cursor = connection.cursor()
+try:
+    connection = pymysql.connect(
+        host=get_config_value('MYSQL_HOST', 'localhost'),
+        user=get_config_value('MYSQL_USER', 'root'),
+        password=get_config_value('MYSQL_PASSWORD', ''),
+        db=get_config_value('MYSQL_DATABASE', 'VC'),
+        port=int(get_config_value('MYSQL_PORT', '3306')),
+    )
+    cursor = connection.cursor()
+    DB_CONNECTION_ERROR = None
+except pymysql.MySQLError as exc:
+    connection = None
+    cursor = None
+    DB_CONNECTION_ERROR = exc
+
+
+def database_available():
+    return cursor is not None and connection is not None
 
 
 # inserting miscellaneous data, fetched results, prediction and recommendation into user_data table
 def insert_data(sec_token, ip_add, host_name, dev_user, os_name_ver, latlong, city, state, country, act_name, act_mail, act_mob, name, email, res_score, timestamp, no_of_pages, reco_field, cand_level, skills, recommended_skills, courses, pdf_name):
+    if not database_available():
+        return
     DB_table_name = 'user_data'
     insert_sql = "insert into " + DB_table_name + """
     values (0,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
@@ -135,6 +205,8 @@ def insert_data(sec_token, ip_add, host_name, dev_user, os_name_ver, latlong, ci
 
 # inserting feedback data into user_feedback table
 def insertf_data(feed_name, feed_email, feed_score, comments, Timestamp):
+    if not database_available():
+        return
     DBf_table_name = 'user_feedback'
     insertfeed_sql = "insert into " + DBf_table_name + """
     values (0,%s,%s,%s,%s,%s)"""
@@ -148,410 +220,105 @@ def insertf_data(feed_name, feed_email, feed_score, comments, Timestamp):
 
 st.set_page_config(
     page_title="AI Resume Analyzer",
-    page_icon=os.path.join(BASE_DIR, 'Logo', 'recommend.png'),
-    layout="wide",
-    initial_sidebar_state="expanded",
+    page_icon=os.path.join(BASE_DIR, 'logo', 'recommend.png'),
 )
-
-
-def apply_global_styles():
-    st.markdown(
-        """
-        <style>
-            :root {
-                --brand: #2563eb;
-                --brand-dark: #1e3a8a;
-                --ink: #172033;
-                --muted: #64748b;
-                --line: #e2e8f0;
-                --surface: #ffffff;
-            }
-
-            .stApp {
-                background:
-                    radial-gradient(circle at top left, rgba(37, 99, 235, 0.08), transparent 30rem),
-                    linear-gradient(180deg, #f8fafc 0%, #eef4ff 100%);
-                color: var(--ink);
-            }
-
-            header[data-testid="stHeader"] {
-                background: rgba(248, 250, 252, 0.86);
-                backdrop-filter: blur(12px);
-                border-bottom: 1px solid rgba(226, 232, 240, 0.8);
-            }
-
-            section[data-testid="stSidebar"] {
-                background: #0f172a;
-                border-right: 1px solid rgba(255, 255, 255, 0.08);
-            }
-
-            section[data-testid="stSidebar"] * {
-                color: #e5edf8 !important;
-            }
-
-            section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
-                background: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.18);
-                border-radius: 8px;
-            }
-
-            .block-container {
-                padding-top: 2rem;
-                max-width: 1180px;
-            }
-
-            .app-hero {
-                background: linear-gradient(135deg, #ffffff 0%, #eef5ff 100%);
-                border: 1px solid var(--line);
-                border-radius: 8px;
-                padding: 28px 32px;
-                margin-bottom: 24px;
-                box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
-            }
-
-            .app-eyebrow {
-                color: var(--brand);
-                font-size: 13px;
-                font-weight: 700;
-                letter-spacing: 0;
-                margin-bottom: 8px;
-                text-transform: uppercase;
-            }
-
-            .app-title {
-                color: var(--ink);
-                font-size: 40px;
-                font-weight: 800;
-                line-height: 1.12;
-                margin: 0 0 10px;
-            }
-
-            .app-subtitle {
-                color: var(--muted);
-                font-size: 17px;
-                line-height: 1.6;
-                margin: 0;
-                max-width: 760px;
-            }
-
-            .hero-metrics {
-                display: grid;
-                gap: 14px;
-                grid-template-columns: repeat(3, minmax(0, 1fr));
-                margin-top: 24px;
-            }
-
-            .metric-tile {
-                background: rgba(255, 255, 255, 0.72);
-                border: 1px solid var(--line);
-                border-radius: 8px;
-                padding: 16px;
-            }
-
-            .metric-value {
-                color: var(--ink);
-                font-size: 24px;
-                font-weight: 800;
-                line-height: 1;
-                margin-bottom: 6px;
-            }
-
-            .metric-label {
-                color: var(--muted);
-                font-size: 13px;
-                line-height: 1.35;
-            }
-
-            .sidebar-brand {
-                border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-                margin: 0 0 20px;
-                padding-bottom: 18px;
-            }
-
-            .sidebar-logo {
-                color: #ffffff;
-                font-size: 22px;
-                font-weight: 800;
-                line-height: 1.15;
-            }
-
-            .sidebar-caption {
-                color: #9fb4d0 !important;
-                font-size: 13px;
-                line-height: 1.45;
-                margin-top: 8px;
-            }
-
-            .page-heading {
-                margin: 8px 0 20px;
-            }
-
-            .page-heading h2 {
-                font-size: 28px;
-                margin: 0 0 6px;
-            }
-
-            .page-heading p {
-                color: var(--muted);
-                font-size: 15px;
-                margin: 0;
-            }
-
-            .soft-panel {
-                background: rgba(255, 255, 255, 0.82);
-                border: 1px solid var(--line);
-                border-radius: 8px;
-                box-shadow: 0 12px 32px rgba(15, 23, 42, 0.06);
-                margin: 16px 0;
-                padding: 20px 22px;
-            }
-
-            .section-kicker {
-                color: var(--brand);
-                font-size: 12px;
-                font-weight: 800;
-                letter-spacing: 0;
-                margin-bottom: 4px;
-                text-transform: uppercase;
-            }
-
-            .info-note {
-                color: var(--muted);
-                font-size: 14px;
-                line-height: 1.55;
-                margin: 0 0 10px;
-            }
-
-            div[data-testid="stMetric"] {
-                background: #ffffff;
-                border: 1px solid var(--line);
-                border-radius: 8px;
-                padding: 14px 16px;
-                box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
-            }
-
-            .stTextInput input,
-            .stTextArea textarea {
-                border-radius: 8px;
-                border: 1px solid #cbd5e1;
-            }
-
-            .stButton > button,
-            .stDownloadButton > button,
-            button[kind="primaryFormSubmit"] {
-                background: var(--brand);
-                border: 1px solid var(--brand);
-                border-radius: 8px;
-                color: white;
-                font-weight: 700;
-                min-height: 42px;
-                box-shadow: 0 10px 22px rgba(37, 99, 235, 0.22);
-            }
-
-            .stButton > button:hover,
-            .stDownloadButton > button:hover,
-            button[kind="primaryFormSubmit"]:hover {
-                background: var(--brand-dark);
-                border-color: var(--brand-dark);
-                color: white;
-            }
-
-            div[data-testid="stFileUploader"] section {
-                background: var(--surface);
-                border: 1px dashed #93c5fd;
-                border-radius: 8px;
-            }
-
-            div[data-testid="stDataFrame"],
-            div[data-testid="stPlotlyChart"] {
-                background: var(--surface);
-                border: 1px solid var(--line);
-                border-radius: 8px;
-                padding: 10px;
-            }
-
-            h1, h2, h3 {
-                color: var(--ink);
-                letter-spacing: 0;
-            }
-
-            .stAlert {
-                border-radius: 8px;
-            }
-
-            @media (max-width: 760px) {
-                .app-title {
-                    font-size: 32px;
-                }
-
-                .hero-metrics {
-                    grid-template-columns: 1fr;
-                }
-            }
-
-            #MainMenu, footer {
-                visibility: hidden;
-            }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_app_header():
-    st.markdown(
-        """
-        <div class="app-hero">
-            <div class="app-eyebrow">Resume intelligence platform</div>
-            <h1 class="app-title">AI Resume Analyzer</h1>
-            <p class="app-subtitle">
-                Upload a resume to extract candidate details, evaluate profile strength,
-                recommend skills, and review analytics from a clean recruiter-ready dashboard.
-            </p>
-            <div class="hero-metrics">
-                <div class="metric-tile">
-                    <div class="metric-value">PDF</div>
-                    <div class="metric-label">Resume parsing and profile extraction</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-value">100</div>
-                    <div class="metric-label">Resume score with practical improvement checks</div>
-                </div>
-                <div class="metric-tile">
-                    <div class="metric-value">Admin</div>
-                    <div class="metric-label">Candidate analytics and feedback dashboard</div>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_page_heading(title, subtitle):
-    st.markdown(
-        f"""
-        <div class="page-heading">
-            <h2>{title}</h2>
-            <p>{subtitle}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_soft_panel(kicker, title, body):
-    st.markdown(
-        f"""
-        <div class="soft-panel">
-            <div class="section-kicker">{kicker}</div>
-            <h3>{title}</h3>
-            <p class="info-note">{body}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 ###### Main function run() ######
 
 
 def run():
-    apply_global_styles()
-    render_app_header()
 
-    st.sidebar.markdown(
-        """
-        <div class="sidebar-brand">
-            <div class="sidebar-logo">AI Resume Analyzer</div>
-            <div class="sidebar-caption">Resume screening, recommendations, feedback, and analytics in one workspace.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.sidebar.markdown("## Navigation")
+    # (Logo, Heading, Sidebar etc)
+    
+
+    logo_path = os.path.join(BASE_DIR, "logo", "RESUM.png")
+
+    img = Image.open(logo_path)
+    st.image(img)
+    st.sidebar.markdown("# Choose Something...")
     activities = ["User", "Feedback", "About", "Admin"]
     choice = st.sidebar.selectbox(
-        "Choose a workspace", activities)
-    link = '<span style="color:#9fb4d0;">Built by Himanshi & Agam</span>'
-    # link = '<b>Built with 🤍 by <a href="https://dnoobnerd.netlify.app/" style="text-decoration: none; color: #021659;">Himanshi & Agam </a></b>'
+        "Choose among the given options:", activities)
+    link = '<b>Built with 🤍 by <a href="https://dnoobnerd.netlify.app/" style="text-decoration: none; color: #021659;">Himanshi & Agam </a></b>'
     st.sidebar.markdown(link, unsafe_allow_html=True)
-    st.sidebar.markdown(
-        '<p class="sidebar-caption">Local MySQL connected. Streamlit dashboard ready.</p>',
-        unsafe_allow_html=True,
-    )
+    st.sidebar.markdown('''
+        <!-- site visitors -->
+
+        <div id="sfct2xghr8ak6lfqt3kgru233378jya38dy" hidden></div>
+
+        <noscript>
+            <a href="https://www.freecounterstat.com" title="hit counter">
+                <img src="https://counter9.stat.ovh/private/freecounterstat.php?c=t2xghr8ak6lfqt3kgru233378jya38dy" border="0" title="hit counter" alt="hit counter"> -->
+            </a>
+        </noscript>
+    
+        <p>Visitors <img src="https://counter9.stat.ovh/private/freecounterstat.php?c=t2xghr8ak6lfqt3kgru233378jya38dy" title="Free Counter" Alt="web counter" width="60px"  border="0" /></p>
+    
+    ''', unsafe_allow_html=True)
+
+    if not database_available():
+        st.sidebar.warning("Database features are disabled until MySQL secrets are configured.")
 
     ###### Creating Database and Table ######
 
-    # Create the DB
-    db_sql = """CREATE DATABASE IF NOT EXISTS CV;"""
-    cursor.execute(db_sql)
+    if database_available():
+        # Create the DB
+        db_sql = """CREATE DATABASE IF NOT EXISTS CV;"""
+        cursor.execute(db_sql)
 
-    # Create table user_data and user_feedback
-    DB_table_name = 'user_data'
-    table_sql = "CREATE TABLE IF NOT EXISTS " + DB_table_name + """
-                    (ID INT NOT NULL AUTO_INCREMENT,
-                    sec_token varchar(20) NOT NULL,
-                    ip_add varchar(50) NULL,
-                    host_name varchar(50) NULL,
-                    dev_user varchar(50) NULL,
-                    os_name_ver varchar(50) NULL,
-                    latlong varchar(50) NULL,
-                    city varchar(50) NULL,
-                    state varchar(50) NULL,
-                    country varchar(50) NULL,
-                    act_name varchar(50) NOT NULL,
-                    act_mail varchar(50) NOT NULL,
-                    act_mob varchar(20) NOT NULL,
-                    Name varchar(500) NOT NULL,
-                    Email_ID VARCHAR(500) NOT NULL,
-                    resume_score VARCHAR(8) NOT NULL,
-                    Timestamp VARCHAR(50) NOT NULL,
-                    Page_no VARCHAR(5) NOT NULL,
-                    Predicted_Field BLOB NOT NULL,
-                    User_level BLOB NOT NULL,
-                    Actual_skills BLOB NOT NULL,
-                    Recommended_skills BLOB NOT NULL,
-                    Recommended_courses BLOB NOT NULL,
-                    pdf_name varchar(50) NOT NULL,
-                    PRIMARY KEY (ID)
-                    );
-                """
-    cursor.execute(table_sql)
-
-    DBf_table_name = 'user_feedback'
-    tablef_sql = "CREATE TABLE IF NOT EXISTS " + DBf_table_name + """
-                    (ID INT NOT NULL AUTO_INCREMENT,
-                        feed_name varchar(50) NOT NULL,
-                        feed_email VARCHAR(50) NOT NULL,
-                        feed_score VARCHAR(5) NOT NULL,
-                        comments VARCHAR(100) NULL,
+        # Create table user_data and user_feedback
+        DB_table_name = 'user_data'
+        table_sql = "CREATE TABLE IF NOT EXISTS " + DB_table_name + """
+                        (ID INT NOT NULL AUTO_INCREMENT,
+                        sec_token varchar(20) NOT NULL,
+                        ip_add varchar(50) NULL,
+                        host_name varchar(50) NULL,
+                        dev_user varchar(50) NULL,
+                        os_name_ver varchar(50) NULL,
+                        latlong varchar(50) NULL,
+                        city varchar(50) NULL,
+                        state varchar(50) NULL,
+                        country varchar(50) NULL,
+                        act_name varchar(50) NOT NULL,
+                        act_mail varchar(50) NOT NULL,
+                        act_mob varchar(20) NOT NULL,
+                        Name varchar(500) NOT NULL,
+                        Email_ID VARCHAR(500) NOT NULL,
+                        resume_score VARCHAR(8) NOT NULL,
                         Timestamp VARCHAR(50) NOT NULL,
+                        Page_no VARCHAR(5) NOT NULL,
+                        Predicted_Field BLOB NOT NULL,
+                        User_level BLOB NOT NULL,
+                        Actual_skills BLOB NOT NULL,
+                        Recommended_skills BLOB NOT NULL,
+                        Recommended_courses BLOB NOT NULL,
+                        pdf_name varchar(50) NOT NULL,
                         PRIMARY KEY (ID)
-                    );
-                """
-    cursor.execute(tablef_sql)
+                        );
+                    """
+        cursor.execute(table_sql)
+
+        DBf_table_name = 'user_feedback'
+        tablef_sql = "CREATE TABLE IF NOT EXISTS " + DBf_table_name + """
+                        (ID INT NOT NULL AUTO_INCREMENT,
+                            feed_name varchar(50) NOT NULL,
+                            feed_email VARCHAR(50) NOT NULL,
+                            feed_score VARCHAR(5) NOT NULL,
+                            comments VARCHAR(100) NULL,
+                            Timestamp VARCHAR(50) NOT NULL,
+                            PRIMARY KEY (ID)
+                        );
+                    """
+        cursor.execute(tablef_sql)
 
     ###### CODE FOR CLIENT SIDE (USER) ######
     if choice == 'User':
-        render_page_heading(
-            "Analyze a Resume",
-            "Enter candidate details, upload a PDF resume, and generate role, skill, score, and course recommendations.",
-        )
-        render_soft_panel(
-            "Candidate intake",
-            "Profile details",
-            "These fields identify the candidate record saved in the admin dashboard.",
-        )
 
         # Collecting Miscellaneous Information
-        col_name, col_email, col_mobile = st.columns(3)
-        with col_name:
-            act_name = st.text_input('Full name', placeholder='Candidate name')
-        with col_email:
-            act_mail = st.text_input('Email address', placeholder='name@example.com')
-        with col_mobile:
-            act_mob = st.text_input('Mobile number', placeholder='10 digit number')
+        act_name = st.text_input('Name*')
+        act_mail = st.text_input('Mail*')
+        act_mob = st.text_input('Mobile Number*')
         sec_token = secrets.token_urlsafe(12)
         host_name = socket.gethostname()
         ip_add = socket.gethostbyname(host_name)
@@ -569,14 +336,12 @@ def run():
         state = statee
         country = countryy
 
-        render_soft_panel(
-            "Resume upload",
-            "Upload PDF resume",
-            "The analyzer will extract contact information, skills, education signals, resume score, and personalized recommendations.",
-        )
+        # Upload Resume
+        st.markdown(
+            '''<h5 style='text-align: left; color: #021659;'> Upload Your Resume, And Get Smart Recommendations</h5>''', unsafe_allow_html=True)
 
         # file upload in pdf format
-        pdf_file = st.file_uploader("Select resume PDF", type=["pdf"])
+        pdf_file = st.file_uploader("Choose your Resume", type=["pdf"])
         if pdf_file is not None:
             with st.spinner('Hang On While We Cook Magic For You...'):
                 time.sleep(4)
@@ -589,28 +354,22 @@ def run():
             show_pdf(save_image_path)
 
             # parsing and extracting whole resume
-            resume_data = ResumeParser(save_image_path).get_extracted_data()
+            resume_data = parse_resume(save_image_path)
             if resume_data:
 
                 # Get the whole resume data into resume_text
                 resume_text = pdf_reader(save_image_path)
 
                 # Showing Analyzed data from (resume_data)
-                render_page_heading(
-                    "Resume Analysis",
-                    "Here is the extracted candidate profile and the first-pass resume assessment.",
-                )
                 st.header("**Resume Analysis 🤘**")
-                st.success("Analysis completed for " + resume_data['name'])
+                st.success("Hello " + resume_data['name'])
                 st.subheader("**Your Basic info 👀**")
                 try:
-                    info_col1, info_col2, info_col3 = st.columns(3)
-                    info_col1.metric("Name", resume_data['name'])
-                    info_col2.metric("Email", resume_data['email'])
-                    info_col3.metric("Contact", resume_data['mobile_number'])
-                    info_col4, info_col5 = st.columns(2)
-                    info_col4.metric("Degree", str(resume_data['degree']))
-                    info_col5.metric("Resume pages", str(resume_data['no_of_pages']))
+                    st.text('Name: '+resume_data['name'])
+                    st.text('Email: ' + resume_data['email'])
+                    st.text('Contact: ' + resume_data['mobile_number'])
+                    st.text('Degree: '+str(resume_data['degree']))
+                    st.text('Resume pages: '+str(resume_data['no_of_pages']))
 
                 except:
                     pass
@@ -988,10 +747,9 @@ def run():
 
     ###### CODE FOR FEEDBACK SIDE ######
     elif choice == 'Feedback':
-        render_page_heading(
-            "Feedback Center",
-            "Capture user feedback and review satisfaction trends from previous submissions.",
-        )
+        if not database_available():
+            st.warning("Feedback storage and rating history need a MySQL database. Configure Streamlit secrets to enable this page.")
+            return
 
         # timestamp
         ts = time.time()
@@ -1001,14 +759,11 @@ def run():
 
         # Feedback Form
         with st.form("my_form"):
-            st.subheader("Submit Feedback")
-            feed_col1, feed_col2 = st.columns(2)
-            with feed_col1:
-                feed_name = st.text_input('Name')
-            with feed_col2:
-                feed_email = st.text_input('Email')
+            st.write("Feedback form")
+            feed_name = st.text_input('Name')
+            feed_email = st.text_input('Email')
             feed_score = st.slider('Rate Us From 1 - 5', 1, 5)
-            comments = st.text_input('Comments', placeholder='Share what worked well or what should improve')
+            comments = st.text_input('Comments')
             Timestamp = timestamp
             submitted = st.form_submit_button("Submit")
             if submitted:
@@ -1029,7 +784,7 @@ def run():
         values = plotfeed_data.feed_score.value_counts()
 
         # plotting pie chart for user ratings
-        st.subheader("Rating Distribution")
+        st.subheader("**Past User Rating's**")
         fig = px.pie(values=values, names=labels, title="Chart of User Rating Score From 1 - 5",
                      color_discrete_sequence=px.colors.sequential.Aggrnyl)
         st.plotly_chart(fig)
@@ -1038,18 +793,14 @@ def run():
         cursor.execute('select feed_name, comments from user_feedback')
         plfeed_cmt_data = cursor.fetchall()
 
-        st.subheader("Recent Comments")
+        st.subheader("**User Comment's**")
         dff = pd.DataFrame(plfeed_cmt_data, columns=['User', 'Comment'])
         st.dataframe(dff, width=1000)
 
     ###### CODE FOR ABOUT PAGE ######
     elif choice == 'About':
-        render_page_heading(
-            "About",
-            "A practical resume analysis tool for applicants, recruiters, and placement teams.",
-        )
 
-        st.subheader("Platform Overview")
+        st.subheader("**About The Tool - AI RESUME ANALYZER**")
 
         st.markdown('''
 
@@ -1078,18 +829,15 @@ def run():
 
     ###### CODE FOR ADMIN SIDE (ADMIN) ######
     else:
-        render_page_heading(
-            "Admin Dashboard",
-            "Review candidate submissions, feedback, resume scores, locations, and recommendation analytics.",
-        )
-        st.info('Enter admin credentials to view protected analytics.')
+        st.success('Welcome to Admin Side')
+
+        if not database_available():
+            st.warning("Admin analytics need a MySQL database. Configure Streamlit secrets to enable this page.")
+            return
 
         #  Admin Login
-        login_col1, login_col2 = st.columns(2)
-        with login_col1:
-            ad_user = st.text_input("Username")
-        with login_col2:
-            ad_password = st.text_input("Password", type='password')
+        ad_user = st.text_input("Username")
+        ad_password = st.text_input("Password", type='password')
 
         if st.button('Login'):
 

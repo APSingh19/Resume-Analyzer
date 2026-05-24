@@ -10,4 +10,3 @@ __pycache__/
 *.log
 .env
 App/Uploaded_Resumes/*.pdf
-
