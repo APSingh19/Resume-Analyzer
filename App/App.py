@@ -19,6 +19,15 @@ import io
 import random
 import plotly.express as px  # to create visualisations at the admin session
 import plotly.graph_objects as go
+import nltk
+
+nltk.download('stopwords')
+nltk.download('punkt')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('wordnet')
+nltk.download('omw-1.4')
+
+from pyresparser import ResumeParser
 from geopy.geocoders import Nominatim
 # libraries used to parse the pdf files
 try:
