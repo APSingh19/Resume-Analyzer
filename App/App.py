@@ -7,6 +7,7 @@ import pandas as pd
 import base64
 import random
 import time
+import getpass
 import datetime
 import pymysql
 import os
@@ -331,7 +332,10 @@ def run():
         sec_token = secrets.token_urlsafe(12)
         host_name = socket.gethostname()
         ip_add = socket.gethostbyname(host_name)
-        dev_user = os.getlogin()
+        try:
+            dev_user = getpass.getuser()
+        except:
+            dev_user = "admin"
         os_name_ver = platform.system() + " " + platform.release()
         g = geocoder.ip('me')
         latlong = g.latlng
