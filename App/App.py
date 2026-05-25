@@ -250,7 +250,6 @@ def run():
     activities = ["User", "Feedback", "About", "Admin"]
     choice = st.sidebar.selectbox(
         "Choose among the given options:", activities)
-    link = '<b>Built with 🤍 by <a href="https://dnoobnerd.netlify.app/" style="text-decoration: none; color: #021659;">Himanshi & Agam </a></b>'
     st.sidebar.markdown(link, unsafe_allow_html=True)
     st.sidebar.markdown('''
         <!-- site visitors -->
