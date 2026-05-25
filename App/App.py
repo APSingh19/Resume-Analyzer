@@ -828,14 +828,11 @@ def run():
             <b>Feedback -</b> <br/>
             A place where user can suggest some feedback about the tool.<br/><br/>
             <b>Admin -</b> <br/>
-            For login use <b>Agam</b> as username and <b>Himanshi</b> as password.<br/>
+            For login use <b>Agam</b> as username and <b>1234</b> as password.<br/>
             It will load all the required stuffs and perform analysis.
         </p><br/><br/>
 
-        <p align="justify">
-            Built with 🤍 by 
-            <a href="url" style="text-decoration: none; color: grey;">Agam & Himanshi</a> 
-        </p>
+        
 
         ''', unsafe_allow_html=True)
 
@@ -854,7 +851,7 @@ def run():
         if st.button('Login'):
 
             # Credentials
-            if ad_user == 'Agam' and ad_password == 'Himanshi':
+            if ad_user == 'Agam' and ad_password == '1234':
 
                 # Fetch miscellaneous data from user_data(table) and convert it into dataframe
                 cursor.execute(
