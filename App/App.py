@@ -250,7 +250,7 @@ def run():
     activities = ["User", "Feedback", "About", "Admin"]
     choice = st.sidebar.selectbox(
         "Choose among the given options:", activities)
-    st.sidebar.markdown(link, unsafe_allow_html=True)
+   st.sidebar.markdown("", unsafe_allow_html=True)
     st.sidebar.markdown('''
         <!-- site visitors -->
 
