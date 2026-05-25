@@ -266,8 +266,8 @@ def run():
     
     ''', unsafe_allow_html=True)
 
-    if not database_available():
-        st.sidebar.warning("Database features are disabled until MySQL secrets are configured.")
+    # if not database_available():
+    #     st.sidebar.warning("Database features are disabled until MySQL secrets are configured.")
 
     ###### Creating Database and Table ######
 
