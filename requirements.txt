@@ -1,1 +1,12 @@
--r App/requirements.txt
+streamlit==1.47.0
+pandas==2.3.1
+plotly==6.2.0
+PyMySQL==1.1.1
+nltk==3.9.1
+Pillow==11.3.0
+pdfminer.six==20250506
+docx2txt==0.9
+geocoder==1.38.1
+geopy==2.4.1
+streamlit-tags==1.2.8
+python-dateutil==2.9.0.post0
