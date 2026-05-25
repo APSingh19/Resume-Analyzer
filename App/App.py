@@ -243,8 +243,8 @@ def run():
 
     logo_path = os.path.join(BASE_DIR, "logo", "RESUM.png")
 
-    img = Image.open(logo_path)
-    st.image(img)
+   # img = Image.open(logo_path)
+   # st.image(img)
     st.sidebar.markdown("# Choose Something...")
     activities = ["User", "Feedback", "About", "Admin"]
     choice = st.sidebar.selectbox(
